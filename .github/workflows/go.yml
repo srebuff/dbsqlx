@@ -34,8 +34,7 @@ jobs:
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/') # Only run on tag pushes (releases)
       with:
-        files: target/dbsqlx # Path to the file to upload
+        files: dbsqlx # Path to the file to upload
         token: ${{ secrets.GITHUB_TOKEN }}
   
