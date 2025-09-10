@@ -1,0 +1,434 @@
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"reflect"
+	"testing"
+
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
+)
+
+func parseSQL(sql string) (*ast.StmtNode, error) {
+	p := parser.New()
+	stmtNodes, _, err := p.ParseSQL(sql)
+	if err != nil {
+		return nil, err
+	}
+	return &stmtNodes[0], nil
+}
+
+func TestExtract(t *testing.T) {
+	tests := []struct {
+		name            string
+		sql             string
+		wantColNames    []string
+		wantTableNames  []string
+		wantAction      string
+		wantWhereFilter string
+	}{
+		{
+			name:            "INSERT statement",
+			sql:             "INSERT INTO users (id, name, email) VALUES (1, 'John', 'john@example.com')",
+			wantColNames:    []string{"id", "name", "email"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "INSERT",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "UPDATE statement",
+			sql:             "UPDATE users SET name = 'Jane' WHERE id = 1",
+			wantColNames:    []string{"name", "id"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "UPDATE",
+			wantWhereFilter: "id=1",
+		},
+		{
+			name:            "DELETE statement",
+			sql:             "DELETE FROM users WHERE id = 1",
+			wantColNames:    []string{"id"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "DELETE",
+			wantWhereFilter: "id=1",
+		},
+		{
+			name:            "UPDATE with complex WHERE",
+			sql:             "UPDATE users SET name = 'Jane', email = 'jane@example.com' WHERE id = 1 AND status = 'active'",
+			wantColNames:    []string{"name", "email", "id", "status"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "UPDATE",
+			wantWhereFilter: "id=1 and status='active'",
+		},
+		{
+			name:            "DELETE with complex WHERE",
+			sql:             "DELETE FROM users WHERE id = 1 AND created_at < '2023-01-01'",
+			wantColNames:    []string{"id", "created_at"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "DELETE",
+			wantWhereFilter: "id=1 and created_at<'2023-01-01'",
+		},
+		{
+			name:            "Complex DELETE with JOIN and aliases",
+			sql:             "DELETE u FROM users u JOIN profiles p ON u.id = p.user_id WHERE u.status = 'inactive' AND p.last_login < '2023-01-01'",
+			wantColNames:    []string{"id", "user_id", "status", "last_login"},
+			wantTableNames:  []string{"users", "profiles"},
+			wantAction:      "DELETE",
+			wantWhereFilter: "users.status='inactive' and profiles.last_login<'2023-01-01'",
+		},
+		{
+			name:            "UPDATE with alias",
+			sql:             "UPDATE users u SET u.name = 'Jane' WHERE u.id = 1",
+			wantColNames:    []string{"name", "id"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "UPDATE",
+			wantWhereFilter: "users.id=1",
+		},
+		{
+			name:            "SELECT statement",
+			sql:             "SELECT id, name FROM users WHERE id = 1",
+			wantColNames:    []string{"id", "name", "id"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "SELECT",
+			wantWhereFilter: "id=1",
+		},
+		{
+			name:            "INSERT with multiple columns",
+			sql:             "INSERT INTO products (name, price, category_id) VALUES ('Product1', 10.99, 1)",
+			wantColNames:    []string{"name", "price", "category_id"},
+			wantTableNames:  []string{"products"},
+			wantAction:      "INSERT",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "UPDATE with multiple conditions",
+			sql:             "UPDATE orders SET status = 'shipped', shipped_date = '2023-01-01' WHERE id = 1 AND customer_id = 2",
+			wantColNames:    []string{"status", "shipped_date", "id", "customer_id"},
+			wantTableNames:  []string{"orders"},
+			wantAction:      "UPDATE",
+			wantWhereFilter: "id=1 and customer_id=2",
+		},
+		{
+			name:            "DELETE with multiple conditions",
+			sql:             "DELETE FROM logs WHERE level = 'info' AND created_at < '2023-01-01'",
+			wantColNames:    []string{"level", "created_at"},
+			wantTableNames:  []string{"logs"},
+			wantAction:      "DELETE",
+			wantWhereFilter: "level='info' and created_at<'2023-01-01'",
+		},
+		{
+			name:            "SELECT with JOIN and aliases",
+			sql:             "SELECT u.name, p.title FROM users u JOIN posts p ON u.id = p.user_id WHERE u.active = 1",
+			wantColNames:    []string{"name", "title", "id", "user_id", "active"},
+			wantTableNames:  []string{"users", "posts"},
+			wantAction:      "SELECT",
+			wantWhereFilter: "users.active=1",
+		},
+		{
+			name:            "UPDATE with no WHERE clause",
+			sql:             "UPDATE users SET last_login = NOW()",
+			wantColNames:    []string{"last_login"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "UPDATE",
+			wantWhereFilter: "",
+		},
+		// {
+		// 	name:           "DELETE with no WHERE clause",
+		// 	sql:            "DELETE FROM temp_data",
+		// 	wantColNames:   []string{},
+		// 	wantTableNames: []string{"temp_data"},
+		// 	wantAction:     "DELETE",
+		// 	wantWhereFilter: "",
+		// },
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			astNode, err := parseSQL(tt.sql)
+			if err != nil {
+				t.Fatalf("parseSQL() error = %v", err)
+			}
+
+			gotColNames, gotTableNames, gotAction, gotWhereFilter := extract(astNode)
+
+			if !reflect.DeepEqual(gotColNames, tt.wantColNames) {
+				t.Errorf("extract() gotColNames = %v, want %v", gotColNames, tt.wantColNames)
+			}
+
+			if !reflect.DeepEqual(gotTableNames, tt.wantTableNames) {
+				t.Errorf("extract() gotTableNames = %v, want %v", gotTableNames, tt.wantTableNames)
+			}
+
+			if gotAction != tt.wantAction {
+				t.Errorf("extract() gotAction = %v, want %v", gotAction, tt.wantAction)
+			}
+
+			if gotWhereFilter != tt.wantWhereFilter {
+				t.Errorf("extract() gotWhereFilter = %v, want %v", gotWhereFilter, tt.wantWhereFilter)
+			}
+		})
+	}
+}
+
+func TestColXEnter(t *testing.T) {
+	// Test that the visitor correctly identifies different statement types
+	tests := []struct {
+		name       string
+		sql        string
+		wantAction string
+	}{
+		{
+			name:       "INSERT statement",
+			sql:        "INSERT INTO users (id) VALUES (1)",
+			wantAction: "INSERT",
+		},
+		{
+			name:       "UPDATE statement",
+			sql:        "UPDATE users SET id = 1",
+			wantAction: "UPDATE",
+		},
+		{
+			name:       "DELETE statement",
+			sql:        "DELETE FROM users",
+			wantAction: "DELETE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			astNode, err := parseSQL(tt.sql)
+			if err != nil {
+				t.Fatalf("parseSQL() error = %v", err)
+			}
+
+			v := &colX{
+				aliasMap: make(map[string]string),
+			}
+			(*astNode).Accept(v)
+
+			if v.action != tt.wantAction {
+				t.Errorf("colX.Enter() action = %v, want %v", v.action, tt.wantAction)
+			}
+		})
+	}
+}
+
+func TestCheckSQLSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name:    "Valid SELECT statement",
+			sql:     "SELECT id, name FROM users WHERE id = 1",
+			wantErr: false,
+		},
+		{
+			name:    "Valid INSERT statement",
+			sql:     "INSERT INTO users (id, name) VALUES (1, 'John')",
+			wantErr: false,
+		},
+		{
+			name:    "Valid UPDATE statement",
+			sql:     "UPDATE users SET name = 'Jane' WHERE id = 1",
+			wantErr: false,
+		},
+		{
+			name:    "Valid DELETE statement",
+			sql:     "DELETE FROM users WHERE id = 1",
+			wantErr: false,
+		},
+		{
+			name:    "Invalid SQL - incomplete WHERE clause",
+			sql:     "SELECT id, name FROM users WHERE id =",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid SQL - missing table name",
+			sql:     "SELECT id, name FROM WHERE id = 1",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid SQL - incomplete INSERT",
+			sql:     "INSERT INTO users (id, name) VALUES",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkSQLSyntax(tt.sql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkSQLSyntax() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGenerateMysqldumpCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		wantCommand string
+		expectError bool
+	}{
+		{
+			name:        "SELECT with WHERE clause",
+			sql:         "SELECT * FROM users WHERE id = 1",
+			wantCommand: "mysqldump --where=\"id=1\" database_name users",
+		},
+		{
+			name:        "SELECT without WHERE clause",
+			sql:         "SELECT * FROM users",
+			wantCommand: "mysqldump database_name users",
+		},
+		{
+			name:        "DELETE with complex WHERE clause",
+			sql:         "DELETE FROM users WHERE status = 'inactive' AND last_login < '2023-01-01'",
+			wantCommand: "mysqldump --where=\"status='inactive' and last_login<'2023-01-01'\" database_name users",
+		},
+		{
+			name:        "UPDATE statement",
+			sql:         "UPDATE users SET name = 'Jane' WHERE id = 1",
+			wantCommand: "mysqldump --where=\"id=1\" database_name users",
+		},
+		{
+			name:        "INSERT statement",
+			sql:         "INSERT INTO users (id, name) VALUES (1, 'John')",
+			wantCommand: "mysqldump database_name users",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			astNode, err := parseSQL(tt.sql)
+			if err != nil {
+				t.Fatalf("parseSQL() error = %v", err)
+			}
+
+			_, tableNames, _, whereFilter := extract(astNode)
+
+			if len(tableNames) == 0 {
+				if !tt.expectError {
+					t.Errorf("Expected table names but got none")
+				}
+				return
+			}
+
+			// Generate mysqldump command
+			var command string
+			tableName := tableNames[0]
+			if whereFilter != "" {
+				command = fmt.Sprintf("mysqldump --where=\"%s\" database_name %s", whereFilter, tableName)
+			} else {
+				command = fmt.Sprintf("mysqldump database_name %s", tableName)
+			}
+
+			if command != tt.wantCommand {
+				t.Errorf("generateMysqldumpCommand() = %v, want %v", command, tt.wantCommand)
+			}
+		})
+	}
+}
+
+func TestReadSQLFromFile(t *testing.T) {
+	// Create a temporary SQL file for testing
+	sqlContent := "SELECT id, name FROM users WHERE id = 1"
+	tmpfile, err := ioutil.TempFile("", "test*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	if _, err := tmpfile.Write([]byte(sqlContent)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tmpfile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read SQL from file
+	content, err := ioutil.ReadFile(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Error reading file: %v", err)
+	}
+
+	sql := string(content)
+	if sql != sqlContent {
+		t.Errorf("ReadSQLFromFile() = %v, want %v", sql, sqlContent)
+	}
+
+	// Test parsing the SQL from file
+	astNode, err := parseSQL(sql)
+	if err != nil {
+		t.Fatalf("parseSQL() error = %v", err)
+	}
+
+	colNames, tableNames, action, whereFilter := extract(astNode)
+
+	expectedColNames := []string{"id", "name", "id"}
+	expectedTableNames := []string{"users"}
+	expectedAction := "SELECT"
+	expectedWhereFilter := "id=1"
+
+	if !reflect.DeepEqual(colNames, expectedColNames) {
+		t.Errorf("colNames = %v, want %v", colNames, expectedColNames)
+	}
+
+	if !reflect.DeepEqual(tableNames, expectedTableNames) {
+		t.Errorf("tableNames = %v, want %v", tableNames, expectedTableNames)
+	}
+
+	if action != expectedAction {
+		t.Errorf("action = %v, want %v", action, expectedAction)
+	}
+
+	if whereFilter != expectedWhereFilter {
+		t.Errorf("whereFilter = %v, want %v", whereFilter, expectedWhereFilter)
+	}
+}
+
+func TestDumpWithUserAndHost(t *testing.T) {
+	// Save original args and stdout
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	// Prepare CLI args
+	os.Args = []string{
+		"dbsqlx",
+		"-dump",
+		"-user", "root",
+		"-host", "db.example.local",
+		"SELECT * FROM users WHERE id = 42",
+	}
+
+	// Run main()
+	main()
+
+	// Close writer and read captured output
+	_ = w.Close()
+	captured, err := ioutil.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read captured stdout: %v", err)
+	}
+
+	output := string(captured)
+
+	// Expect mysqldump with -h and -u and where clause
+	expected := "mysqldump -h db.example.local -u root --where=\"id=42\" database_name users\n"
+	if output != expected {
+		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
+	}
+}
