@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"reflect"
 	"testing"
@@ -142,6 +142,54 @@ func TestExtract(t *testing.T) {
 		// 	wantAction:     "DELETE",
 		// 	wantWhereFilter: "",
 		// },
+		{
+			name:            "ALTER TABLE ADD COLUMN",
+			sql:             "ALTER TABLE users ADD COLUMN age INT DEFAULT 0",
+			wantColNames:    []string{"age"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "ALTER",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "ALTER TABLE with Chinese comment",
+			sql:             "ALTER TABLE ai_mig_project_space ADD COLUMN manual tinyint(1) DEFAULT 0 COMMENT '是否手动迁移3.0项目到工作空间的：0-否 1-是'",
+			wantColNames:    []string{"manual"},
+			wantTableNames:  []string{"ai_mig_project_space"},
+			wantAction:      "ALTER",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "CREATE TABLE statement",
+			sql:             "CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(100))",
+			wantColNames:    []string{"id", "name"},
+			wantTableNames:  []string{"users"},
+			wantAction:      "CREATE",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "DROP TABLE statement",
+			sql:             "DROP TABLE users",
+			wantColNames:    nil,
+			wantTableNames:  []string{"users"},
+			wantAction:      "DROP",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "DROP TABLE multiple tables",
+			sql:             "DROP TABLE users, orders, products",
+			wantColNames:    nil,
+			wantTableNames:  []string{"users", "orders", "products"},
+			wantAction:      "DROP",
+			wantWhereFilter: "",
+		},
+		{
+			name:            "TRUNCATE TABLE statement",
+			sql:             "TRUNCATE TABLE logs",
+			wantColNames:    nil,
+			wantTableNames:  []string{"logs"},
+			wantAction:      "TRUNCATE",
+			wantWhereFilter: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -193,6 +241,26 @@ func TestColXEnter(t *testing.T) {
 			name:       "DELETE statement",
 			sql:        "DELETE FROM users",
 			wantAction: "DELETE",
+		},
+		{
+			name:       "ALTER TABLE statement",
+			sql:        "ALTER TABLE users ADD COLUMN email VARCHAR(255)",
+			wantAction: "ALTER",
+		},
+		{
+			name:       "CREATE TABLE statement",
+			sql:        "CREATE TABLE products (id INT PRIMARY KEY)",
+			wantAction: "CREATE",
+		},
+		{
+			name:       "DROP TABLE statement",
+			sql:        "DROP TABLE users",
+			wantAction: "DROP",
+		},
+		{
+			name:       "TRUNCATE TABLE statement",
+			sql:        "TRUNCATE TABLE logs",
+			wantAction: "TRUNCATE",
 		},
 	}
 
@@ -337,7 +405,7 @@ func TestGenerateMysqldumpCommand(t *testing.T) {
 func TestReadSQLFromFile(t *testing.T) {
 	// Create a temporary SQL file for testing
 	sqlContent := "SELECT id, name FROM users WHERE id = 1"
-	tmpfile, err := ioutil.TempFile("", "test*.sql")
+	tmpfile, err := os.CreateTemp("", "test*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +420,7 @@ func TestReadSQLFromFile(t *testing.T) {
 	}
 
 	// Read SQL from file
-	content, err := ioutil.ReadFile(tmpfile.Name())
+	content, err := os.ReadFile(tmpfile.Name())
 	if err != nil {
 		t.Fatalf("Error reading file: %v", err)
 	}
@@ -419,7 +487,7 @@ func TestDumpWithUserAndHost(t *testing.T) {
 
 	// Close writer and read captured output
 	_ = w.Close()
-	captured, err := ioutil.ReadAll(r)
+	captured, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("failed to read captured stdout: %v", err)
 	}
@@ -430,5 +498,162 @@ func TestDumpWithUserAndHost(t *testing.T) {
 	expected := "mysqldump -h db.example.local -u root --where=\"id=42\" database_name users\n"
 	if output != expected {
 		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
+	}
+}
+
+func TestParseAll(t *testing.T) {
+	tests := []struct {
+		name          string
+		sql           string
+		wantStmtCount int
+		wantErr       bool
+	}{
+		{
+			name:          "Single statement",
+			sql:           "SELECT * FROM users",
+			wantStmtCount: 1,
+			wantErr:       false,
+		},
+		{
+			name:          "Two statements",
+			sql:           "SELECT * FROM users; SELECT * FROM orders",
+			wantStmtCount: 2,
+			wantErr:       false,
+		},
+		{
+			name:          "Multiple ALTER statements",
+			sql:           "ALTER TABLE users ADD COLUMN age INT; ALTER TABLE orders ADD COLUMN status VARCHAR(50)",
+			wantStmtCount: 2,
+			wantErr:       false,
+		},
+		{
+			name: "Multiple DDL statements from file",
+			sql: `ALTER TABLE ai_mig_project_space ADD COLUMN manual tinyint(1) DEFAULT 0 COMMENT '是否手动迁移3.0项目到工作空间的：0-否 1-是';
+
+ALTER TABLE deploy_env_ref_info ADD COLUMN manual tinyint(1) DEFAULT 0 COMMENT '是否手动迁移3.0环境到主机组的：0-否 1-是';`,
+			wantStmtCount: 2,
+			wantErr:       false,
+		},
+		{
+			name:          "Three mixed statements",
+			sql:           "INSERT INTO users (id) VALUES (1); UPDATE users SET name = 'John' WHERE id = 1; DELETE FROM users WHERE id = 2",
+			wantStmtCount: 3,
+			wantErr:       false,
+		},
+		{
+			name:          "Invalid SQL",
+			sql:           "SELECT * FROM WHERE",
+			wantStmtCount: 0,
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmtNodes, err := parseAll(tt.sql)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseAll() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr && len(stmtNodes) != tt.wantStmtCount {
+				t.Errorf("parseAll() got %d statements, want %d", len(stmtNodes), tt.wantStmtCount)
+			}
+		})
+	}
+}
+
+func TestMultipleStatementsExtraction(t *testing.T) {
+	sql := `ALTER TABLE ai_mig_project_space ADD COLUMN manual tinyint(1) DEFAULT 0;
+	        ALTER TABLE deploy_env_ref_info ADD COLUMN status VARCHAR(50)`
+
+	stmtNodes, err := parseAll(sql)
+	if err != nil {
+		t.Fatalf("parseAll() error = %v", err)
+	}
+
+	if len(stmtNodes) != 2 {
+		t.Fatalf("Expected 2 statements, got %d", len(stmtNodes))
+	}
+
+	// Test first statement
+	colNames1, tableNames1, action1, _ := extract(&stmtNodes[0])
+	expectedColNames1 := []string{"manual"}
+	expectedTableNames1 := []string{"ai_mig_project_space"}
+	expectedAction1 := "ALTER"
+
+	if !reflect.DeepEqual(colNames1, expectedColNames1) {
+		t.Errorf("Statement 1: colNames = %v, want %v", colNames1, expectedColNames1)
+	}
+	if !reflect.DeepEqual(tableNames1, expectedTableNames1) {
+		t.Errorf("Statement 1: tableNames = %v, want %v", tableNames1, expectedTableNames1)
+	}
+	if action1 != expectedAction1 {
+		t.Errorf("Statement 1: action = %v, want %v", action1, expectedAction1)
+	}
+
+	// Test second statement
+	colNames2, tableNames2, action2, _ := extract(&stmtNodes[1])
+	expectedColNames2 := []string{"status"}
+	expectedTableNames2 := []string{"deploy_env_ref_info"}
+	expectedAction2 := "ALTER"
+
+	if !reflect.DeepEqual(colNames2, expectedColNames2) {
+		t.Errorf("Statement 2: colNames = %v, want %v", colNames2, expectedColNames2)
+	}
+	if !reflect.DeepEqual(tableNames2, expectedTableNames2) {
+		t.Errorf("Statement 2: tableNames = %v, want %v", tableNames2, expectedTableNames2)
+	}
+	if action2 != expectedAction2 {
+		t.Errorf("Statement 2: action = %v, want %v", action2, expectedAction2)
+	}
+}
+
+func TestDDLStatementsWithCheckSyntax(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name:    "Valid ALTER TABLE",
+			sql:     "ALTER TABLE users ADD COLUMN email VARCHAR(255)",
+			wantErr: false,
+		},
+		{
+			name:    "Valid CREATE TABLE",
+			sql:     "CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(100))",
+			wantErr: false,
+		},
+		{
+			name:    "Valid DROP TABLE",
+			sql:     "DROP TABLE temp_users",
+			wantErr: false,
+		},
+		{
+			name:    "Valid TRUNCATE TABLE",
+			sql:     "TRUNCATE TABLE logs",
+			wantErr: false,
+		},
+		{
+			name:    "Invalid ALTER TABLE",
+			sql:     "ALTER TABLE users ADD COLUMN",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid CREATE TABLE",
+			sql:     "CREATE TABLE",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkSQLSyntax(tt.sql)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("checkSQLSyntax() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }

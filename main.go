@@ -76,6 +76,40 @@ func (v *colX) Enter(in ast.Node) (ast.Node, bool) {
 			v.extractTableNames(stmt.From.TableRefs)
 		}
 		v.extractWhereFilter(stmt.Where)
+	case *ast.AlterTableStmt:
+		v.action = "ALTER"
+		if stmt.Table != nil {
+			tableName := stmt.Table.Name.O
+			if tableName != "" {
+				v.tableNames = append(v.tableNames, tableName)
+			}
+		}
+	case *ast.CreateTableStmt:
+		v.action = "CREATE"
+		if stmt.Table != nil {
+			tableName := stmt.Table.Name.O
+			if tableName != "" {
+				v.tableNames = append(v.tableNames, tableName)
+			}
+		}
+	case *ast.DropTableStmt:
+		v.action = "DROP"
+		for _, table := range stmt.Tables {
+			if table != nil {
+				tableName := table.Name.O
+				if tableName != "" {
+					v.tableNames = append(v.tableNames, tableName)
+				}
+			}
+		}
+	case *ast.TruncateTableStmt:
+		v.action = "TRUNCATE"
+		if stmt.Table != nil {
+			tableName := stmt.Table.Name.O
+			if tableName != "" {
+				v.tableNames = append(v.tableNames, tableName)
+			}
+		}
 	case *ast.TableName:
 		// We'll handle table names through TableSource to avoid processing aliases
 		// Table names are handled in extractTableNames through TableSource
@@ -206,6 +240,18 @@ func parse(sql string) (*ast.StmtNode, error) {
 	return &stmtNodes[0], nil
 }
 
+// parseAll parses SQL and returns all statement nodes
+func parseAll(sql string) ([]ast.StmtNode, error) {
+	p := parser.New()
+
+	stmtNodes, _, err := p.ParseSQL(sql)
+	if err != nil {
+		return nil, err
+	}
+
+	return stmtNodes, nil
+}
+
 // checkSQLSyntax validates the SQL syntax and returns any errors found
 func checkSQLSyntax(sql string) error {
 	p := parser.New()
@@ -320,58 +366,68 @@ func main() {
 	}
 
 	// Otherwise, process the SQL as usual
-	astNode, err := parse(sql)
+	stmtNodes, err := parseAll(sql)
 	if err != nil {
 		fmt.Printf("parse error: %v\n", err.Error())
 		return
 	}
 
-	colNames, tableNames, action, whereFilter := extract(astNode)
+	// Process each statement
+	for idx, stmtNode := range stmtNodes {
+		colNames, tableNames, action, whereFilter := extract(&stmtNode)
 
-	// If dump mode, generate mysqldump command
-	if dumpMode {
-		if len(tableNames) == 0 {
-			fmt.Println("No tables found in SQL statement")
-			return
+		// If dump mode, generate mysqldump command
+		if dumpMode {
+			if len(tableNames) == 0 {
+				fmt.Println("No tables found in SQL statement")
+				continue
+			}
+
+			// For now, we'll use the first table name for the mysqldump command
+			tableName := tableNames[0]
+
+			// Build connection options, prefer ip over host if provided
+			connTarget := ""
+			if ip != "" {
+				connTarget = ip
+			} else if host != "" {
+				connTarget = host
+			}
+
+			connOpts := ""
+			if connTarget != "" {
+				connOpts += fmt.Sprintf(" -h %s", connTarget)
+			}
+			if user != "" {
+				connOpts += fmt.Sprintf(" -u %s", user)
+			}
+			if password != "" {
+				// Use --password=... syntax to avoid spacing issues
+				connOpts += fmt.Sprintf(" --password=%s", password)
+			}
+
+			// Generate mysqldump command
+			if whereFilter != "" {
+				fmt.Printf("mysqldump%s --where=\"%s\" database_name %s\n", connOpts, whereFilter, tableName)
+			} else {
+				fmt.Printf("mysqldump%s database_name %s\n", connOpts, tableName)
+			}
+			continue
 		}
 
-		// For now, we'll use the first table name for the mysqldump command
-		tableName := tableNames[0]
-
-		// Build connection options, prefer ip over host if provided
-		connTarget := ""
-		if ip != "" {
-			connTarget = ip
-		} else if host != "" {
-			connTarget = host
+		// Normal output mode
+		// If there are multiple statements, add a separator and statement number
+		if len(stmtNodes) > 1 {
+			if idx > 0 {
+				fmt.Println("---")
+			}
+			fmt.Printf("Statement %d:\n", idx+1)
 		}
-
-		connOpts := ""
-		if connTarget != "" {
-			connOpts += fmt.Sprintf(" -h %s", connTarget)
-		}
-		if user != "" {
-			connOpts += fmt.Sprintf(" -u %s", user)
-		}
-		if password != "" {
-			// Use --password=... syntax to avoid spacing issues
-			connOpts += fmt.Sprintf(" --password=%s", password)
-		}
-
-		// Generate mysqldump command
+		fmt.Printf("Columns: %v\n", colNames)
+		fmt.Printf("Tables: %v\n", tableNames)
+		fmt.Printf("Action: %s\n", action)
 		if whereFilter != "" {
-			fmt.Printf("mysqldump%s --where=\"%s\" database_name %s\n", connOpts, whereFilter, tableName)
-		} else {
-			fmt.Printf("mysqldump%s database_name %s\n", connOpts, tableName)
+			fmt.Printf("WHERE filter: %s\n", whereFilter)
 		}
-		return
-	}
-
-	// Normal output mode
-	fmt.Printf("Columns: %v\n", colNames)
-	fmt.Printf("Tables: %v\n", tableNames)
-	fmt.Printf("Action: %s\n", action)
-	if whereFilter != "" {
-		fmt.Printf("WHERE filter: %s\n", whereFilter)
 	}
 }
