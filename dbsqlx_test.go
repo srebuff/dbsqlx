@@ -657,3 +657,267 @@ func TestDDLStatementsWithCheckSyntax(t *testing.T) {
 		})
 	}
 }
+
+func TestDumpMultipleStatements(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		wantCommands []string
+	}{
+		{
+			name: "Multiple statements with different tables",
+			sql: `SELECT u.name, p.title FROM users u JOIN posts p ON u.id = p.user_id WHERE u.active = 1 AND p.published = TRUE;
+UPDATE users SET name = 'Jane' WHERE id = 1;
+SELECT * FROM stat_git_record WHERE id IN ('gitee-22593-5e0e62e88c01e289be0b602ba553cdaec3fd084c')`,
+			wantCommands: []string{
+				"mysqldump --where=\"active=1\" database_name users",
+				"mysqldump --where=\"published=TRUE\" database_name posts",
+				"mysqldump --where=\"id=1\" database_name users",
+				"mysqldump --where=\"id IN ('gitee-22593-5e0e62e88c01e289be0b602ba553cdaec3fd084c')\" database_name stat_git_record",
+			},
+		},
+		{
+			name: "Two SELECT statements with JOINs",
+			sql: `SELECT * FROM users u JOIN orders o ON u.id = o.user_id WHERE u.status = 'active';
+SELECT p.name, c.title FROM products p JOIN categories c ON p.category_id = c.id WHERE c.active = 1`,
+			wantCommands: []string{
+				"mysqldump --where=\"status='active'\" database_name users",
+				"mysqldump database_name orders",
+				"mysqldump database_name products",
+				"mysqldump --where=\"active=1\" database_name categories",
+			},
+		},
+		{
+			name: "Mixed DML statements",
+			sql: `DELETE FROM logs WHERE created_at < '2023-01-01';
+UPDATE users SET last_login = NOW() WHERE id = 5;
+INSERT INTO audit_log (action, timestamp) VALUES ('cleanup', NOW())`,
+			wantCommands: []string{
+				"mysqldump --where=\"created_at<'2023-01-01'\" database_name logs",
+				"mysqldump --where=\"id=5\" database_name users",
+				"mysqldump database_name audit_log",
+			},
+		},
+		{
+			name: "Single statement with multiple tables",
+			sql:  `SELECT u.name, o.total, p.title FROM users u JOIN orders o ON u.id = o.user_id JOIN products p ON o.product_id = p.id WHERE u.active = 1`,
+			wantCommands: []string{
+				"mysqldump --where=\"active=1\" database_name users",
+				"mysqldump database_name orders",
+				"mysqldump database_name products",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmtNodes, err := parseAll(tt.sql)
+			if err != nil {
+				t.Fatalf("parseAll() error = %v", err)
+			}
+
+			var commands []string
+			for _, stmtNode := range stmtNodes {
+				_, tableNames, _, whereFilter := extract(&stmtNode)
+
+				for _, tableName := range tableNames {
+					// Filter the WHERE clause to only include conditions relevant to this table
+					tableSpecificFilter := filterWhereForTable(whereFilter, tableName, tableNames)
+
+					var command string
+					if tableSpecificFilter != "" {
+						command = fmt.Sprintf("mysqldump --where=\"%s\" database_name %s", tableSpecificFilter, tableName)
+					} else {
+						command = fmt.Sprintf("mysqldump database_name %s", tableName)
+					}
+					commands = append(commands, command)
+				}
+			}
+
+			if !reflect.DeepEqual(commands, tt.wantCommands) {
+				t.Errorf("Generated commands mismatch")
+				t.Errorf("Got:")
+				for i, cmd := range commands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+				t.Errorf("Want:")
+				for i, cmd := range tt.wantCommands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+			}
+		})
+	}
+}
+
+func TestDumpMultipleStatementsWithConnection(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		user         string
+		password     string
+		host         string
+		ip           string
+		wantCommands []string
+	}{
+		{
+			name: "Multiple statements with user and host",
+			sql: `SELECT * FROM users WHERE id = 1;
+SELECT * FROM orders WHERE user_id = 1`,
+			user: "root",
+			host: "localhost",
+			wantCommands: []string{
+				"mysqldump -h localhost -u root --where=\"id=1\" database_name users",
+				"mysqldump -h localhost -u root --where=\"user_id=1\" database_name orders",
+			},
+		},
+		{
+			name: "Multiple statements with ip, user and password",
+			sql: `UPDATE users SET status = 'active' WHERE id = 5;
+DELETE FROM logs WHERE level = 'debug'`,
+			user:     "admin",
+			password: "secret",
+			ip:       "192.168.1.100",
+			wantCommands: []string{
+				"mysqldump -h 192.168.1.100 -u admin --password=secret --where=\"id=5\" database_name users",
+				"mysqldump -h 192.168.1.100 -u admin --password=secret --where=\"level='debug'\" database_name logs",
+			},
+		},
+		{
+			name: "Statement with JOIN and connection options",
+			sql:  `SELECT u.name, p.title FROM users u JOIN posts p ON u.id = p.user_id WHERE u.active = 1`,
+			user: "dbuser",
+			host: "db.example.com",
+			wantCommands: []string{
+				"mysqldump -h db.example.com -u dbuser --where=\"active=1\" database_name users",
+				"mysqldump -h db.example.com -u dbuser database_name posts",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmtNodes, err := parseAll(tt.sql)
+			if err != nil {
+				t.Fatalf("parseAll() error = %v", err)
+			}
+
+			// Build connection options
+			connTarget := ""
+			if tt.ip != "" {
+				connTarget = tt.ip
+			} else if tt.host != "" {
+				connTarget = tt.host
+			}
+
+			connOpts := ""
+			if connTarget != "" {
+				connOpts += fmt.Sprintf(" -h %s", connTarget)
+			}
+			if tt.user != "" {
+				connOpts += fmt.Sprintf(" -u %s", tt.user)
+			}
+			if tt.password != "" {
+				connOpts += fmt.Sprintf(" --password=%s", tt.password)
+			}
+
+			var commands []string
+			for _, stmtNode := range stmtNodes {
+				_, tableNames, _, whereFilter := extract(&stmtNode)
+
+				for _, tableName := range tableNames {
+					// Filter the WHERE clause to only include conditions relevant to this table
+					tableSpecificFilter := filterWhereForTable(whereFilter, tableName, tableNames)
+
+					var command string
+					if tableSpecificFilter != "" {
+						command = fmt.Sprintf("mysqldump%s --where=\"%s\" database_name %s", connOpts, tableSpecificFilter, tableName)
+					} else {
+						command = fmt.Sprintf("mysqldump%s database_name %s", connOpts, tableName)
+					}
+					commands = append(commands, command)
+				}
+			}
+
+			if !reflect.DeepEqual(commands, tt.wantCommands) {
+				t.Errorf("Generated commands mismatch")
+				t.Errorf("Got:")
+				for i, cmd := range commands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+				t.Errorf("Want:")
+				for i, cmd := range tt.wantCommands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterWhereForTable(t *testing.T) {
+	tests := []struct {
+		name        string
+		whereFilter string
+		tableName   string
+		allTables   []string
+		want        string
+	}{
+		{
+			name:        "Single table - return all conditions",
+			whereFilter: "id=1 and status='active'",
+			tableName:   "users",
+			allTables:   []string{"users"},
+			want:        "id=1 and status='active'",
+		},
+		{
+			name:        "Multi-table - filter users conditions",
+			whereFilter: "users.active=1 and posts.published=TRUE",
+			tableName:   "users",
+			allTables:   []string{"users", "posts"},
+			want:        "active=1",
+		},
+		{
+			name:        "Multi-table - filter posts conditions",
+			whereFilter: "users.active=1 and posts.published=TRUE",
+			tableName:   "posts",
+			allTables:   []string{"users", "posts"},
+			want:        "published=TRUE",
+		},
+		{
+			name:        "Multi-table - multiple conditions for same table",
+			whereFilter: "users.active=1 and users.status='premium' and posts.published=TRUE",
+			tableName:   "users",
+			allTables:   []string{"users", "posts"},
+			want:        "active=1 and status='premium'",
+		},
+		{
+			name:        "Multi-table - no relevant conditions",
+			whereFilter: "users.active=1 and posts.published=TRUE",
+			tableName:   "orders",
+			allTables:   []string{"users", "posts", "orders"},
+			want:        "",
+		},
+		{
+			name:        "Empty filter",
+			whereFilter: "",
+			tableName:   "users",
+			allTables:   []string{"users", "posts"},
+			want:        "",
+		},
+		{
+			name:        "Three tables - mixed conditions",
+			whereFilter: "users.active=1 and orders.status='pending' and products.available=TRUE",
+			tableName:   "orders",
+			allTables:   []string{"users", "orders", "products"},
+			want:        "status='pending'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterWhereForTable(tt.whereFilter, tt.tableName, tt.allTables)
+			if got != tt.want {
+				t.Errorf("filterWhereForTable() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

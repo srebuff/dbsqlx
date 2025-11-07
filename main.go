@@ -14,11 +14,12 @@ import (
 )
 
 type colX struct {
-	colNames    []string
-	tableNames  []string
-	action      string
-	whereFilter string
-	aliasMap    map[string]string // Map of alias to table name
+	colNames     []string
+	tableNames   []string
+	primaryTable string // The main table being modified (for UPDATE/DELETE)
+	action       string
+	whereFilter  string
+	aliasMap     map[string]string // Map of alias to table name
 }
 
 func (v *colX) Enter(in ast.Node) (ast.Node, bool) {
@@ -38,6 +39,10 @@ func (v *colX) Enter(in ast.Node) (ast.Node, bool) {
 		v.action = "UPDATE"
 		if stmt.TableRefs != nil {
 			v.extractTableNames(stmt.TableRefs.TableRefs)
+			// For UPDATE, the first table is the primary table being updated
+			if len(v.tableNames) > 0 {
+				v.primaryTable = v.tableNames[0]
+			}
 		}
 		// Extract WHERE filter
 		if stmt.Where != nil {
@@ -68,6 +73,10 @@ func (v *colX) Enter(in ast.Node) (ast.Node, bool) {
 		v.action = "DELETE"
 		if stmt.TableRefs != nil {
 			v.extractTableNames(stmt.TableRefs.TableRefs)
+			// For DELETE, the first table is the primary table being deleted from
+			if len(v.tableNames) > 0 {
+				v.primaryTable = v.tableNames[0]
+			}
 		}
 		v.extractWhereFilter(stmt.Where)
 	case *ast.SelectStmt:
@@ -221,23 +230,62 @@ func (v *colX) extractWhereFilter(whereExpr ast.ExprNode) {
 	}
 }
 
-func extract(rootNode *ast.StmtNode) (colNames, tableNames []string, action, whereFilter string) {
+// filterWhereForTable extracts only the WHERE conditions relevant to a specific table
+func filterWhereForTable(whereFilter string, tableName string, allTables []string) string {
+	if whereFilter == "" {
+		return ""
+	}
+
+	// If there's only one table, return the whole filter
+	if len(allTables) <= 1 {
+		return whereFilter
+	}
+
+	// Split by "and" to get individual conditions
+	conditions := strings.Split(whereFilter, " and ")
+	var relevantConditions []string
+
+	for _, condition := range conditions {
+		condition = strings.TrimSpace(condition)
+
+		// Check if this condition references the specific table
+		// Look for "tableName." prefix
+		if strings.Contains(condition, tableName+".") {
+			// Remove the table name prefix for mysqldump
+			condition = strings.ReplaceAll(condition, tableName+".", "")
+			relevantConditions = append(relevantConditions, condition)
+		} else {
+			// Check if condition has no table prefix (applies to current table)
+			hasTablePrefix := false
+			for _, tbl := range allTables {
+				if strings.Contains(condition, tbl+".") {
+					hasTablePrefix = true
+					break
+				}
+			}
+			// If no table prefix found, it might apply to this table
+			if !hasTablePrefix {
+				relevantConditions = append(relevantConditions, condition)
+			}
+		}
+	}
+
+	if len(relevantConditions) == 0 {
+		return ""
+	}
+
+	return strings.Join(relevantConditions, " and ")
+}
+
+// Note: For UPDATE/DELETE with JOINs, mysqldump can only filter on columns
+// from the target table. Cross-table conditions would require manual subqueries.
+
+func extract(rootNode *ast.StmtNode) (colNames, tableNames []string, action, whereFilter, primaryTable string) {
 	v := &colX{
 		aliasMap: make(map[string]string),
 	}
 	(*rootNode).Accept(v)
-	return v.colNames, v.tableNames, v.action, v.whereFilter
-}
-
-func parse(sql string) (*ast.StmtNode, error) {
-	p := parser.New()
-
-	stmtNodes, _, err := p.ParseSQL(sql)
-	if err != nil {
-		return nil, err
-	}
-
-	return &stmtNodes[0], nil
+	return v.colNames, v.tableNames, v.action, v.whereFilter, v.primaryTable
 }
 
 // parseAll parses SQL and returns all statement nodes
@@ -374,7 +422,7 @@ func main() {
 
 	// Process each statement
 	for idx, stmtNode := range stmtNodes {
-		colNames, tableNames, action, whereFilter := extract(&stmtNode)
+		colNames, tableNames, action, whereFilter, primaryTable := extract(&stmtNode)
 
 		// If dump mode, generate mysqldump command
 		if dumpMode {
@@ -382,9 +430,6 @@ func main() {
 				fmt.Println("No tables found in SQL statement")
 				continue
 			}
-
-			// For now, we'll use the first table name for the mysqldump command
-			tableName := tableNames[0]
 
 			// Build connection options, prefer ip over host if provided
 			connTarget := ""
@@ -406,11 +451,63 @@ func main() {
 				connOpts += fmt.Sprintf(" --password=%s", password)
 			}
 
-			// Generate mysqldump command
-			if whereFilter != "" {
-				fmt.Printf("mysqldump%s --where=\"%s\" database_name %s\n", connOpts, whereFilter, tableName)
-			} else {
-				fmt.Printf("mysqldump%s database_name %s\n", connOpts, tableName)
+			// For UPDATE/DELETE statements, only dump the primary table being modified
+			// For SELECT statements, dump all tables in the JOIN
+			tablesToDump := tableNames
+			if (action == "UPDATE" || action == "DELETE") && primaryTable != "" {
+				tablesToDump = []string{primaryTable}
+			}
+
+			// Generate mysqldump command for each table
+			for _, tableName := range tablesToDump {
+				// Filter the WHERE clause to only include conditions relevant to this table
+				tableSpecificFilter := filterWhereForTable(whereFilter, tableName, tableNames)
+
+				// Note: mysqldump --where can only use columns from the target table
+				// For cross-table conditions, provide a helper query to get exact IDs
+				if (action == "UPDATE" || action == "DELETE") && tableName == primaryTable && len(tableNames) > 1 {
+					// Check if there are conditions from other tables
+					allConditionsFilter := whereFilter
+					for _, tbl := range tableNames {
+						allConditionsFilter = strings.ReplaceAll(allConditionsFilter, tbl+".", "")
+					}
+
+					if allConditionsFilter != tableSpecificFilter && tableSpecificFilter != "" {
+						// Generate helper SQL to get exact matching IDs
+						fmt.Printf("# To get exact rows matching all JOIN conditions:\n")
+
+						// Build the JOIN query to get primary keys
+						// Assume first column is the primary key (common convention)
+						fmt.Printf("# Step 1: Get matching IDs\n")
+						fmt.Printf("# mysql -N -e \"SELECT e.id FROM %s e ", tableName)
+
+						// Add JOIN clauses for other tables
+						for _, tbl := range tableNames {
+							if tbl != tableName {
+								// Use simple alias (first letter)
+								alias := string(strings.ToLower(tbl)[0])
+								if alias == string(strings.ToLower(tableName)[0]) {
+									alias = string(strings.ToLower(tbl)[0:2])
+								}
+								fmt.Printf("JOIN %s %s ON <join_condition> ", tbl, alias)
+							}
+						}
+
+						// Restore original filter with table prefixes
+						fmt.Printf("WHERE %s\" database_name > /tmp/%s_ids.txt\n", whereFilter, tableName)
+
+						fmt.Printf("# Step 2: Dump exact rows\n")
+						fmt.Printf("# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" database_name %s\n", connOpts, tableName, tableName)
+						fmt.Printf("#\n")
+						fmt.Printf("# Or use partial filter (may include extra rows):\n")
+					}
+				}
+
+				if tableSpecificFilter != "" {
+					fmt.Printf("mysqldump%s --where=\"%s\" database_name %s\n", connOpts, tableSpecificFilter, tableName)
+				} else {
+					fmt.Printf("mysqldump%s database_name %s\n", connOpts, tableName)
+				}
 			}
 			continue
 		}
