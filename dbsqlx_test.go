@@ -199,7 +199,7 @@ func TestExtract(t *testing.T) {
 				t.Fatalf("parseSQL() error = %v", err)
 			}
 
-			gotColNames, gotTableNames, gotAction, gotWhereFilter := extract(astNode)
+			gotColNames, gotTableNames, gotAction, gotWhereFilter, _ := extract(astNode)
 
 			if !reflect.DeepEqual(gotColNames, tt.wantColNames) {
 				t.Errorf("extract() gotColNames = %v, want %v", gotColNames, tt.wantColNames)
@@ -377,7 +377,7 @@ func TestGenerateMysqldumpCommand(t *testing.T) {
 				t.Fatalf("parseSQL() error = %v", err)
 			}
 
-			_, tableNames, _, whereFilter := extract(astNode)
+			_, tableNames, _, whereFilter, _ := extract(astNode)
 
 			if len(tableNames) == 0 {
 				if !tt.expectError {
@@ -436,7 +436,7 @@ func TestReadSQLFromFile(t *testing.T) {
 		t.Fatalf("parseSQL() error = %v", err)
 	}
 
-	colNames, tableNames, action, whereFilter := extract(astNode)
+	colNames, tableNames, action, whereFilter, _ := extract(astNode)
 
 	expectedColNames := []string{"id", "name", "id"}
 	expectedTableNames := []string{"users"}
@@ -578,7 +578,7 @@ func TestMultipleStatementsExtraction(t *testing.T) {
 	}
 
 	// Test first statement
-	colNames1, tableNames1, action1, _ := extract(&stmtNodes[0])
+	colNames1, tableNames1, action1, _, _ := extract(&stmtNodes[0])
 	expectedColNames1 := []string{"manual"}
 	expectedTableNames1 := []string{"ai_mig_project_space"}
 	expectedAction1 := "ALTER"
@@ -594,7 +594,7 @@ func TestMultipleStatementsExtraction(t *testing.T) {
 	}
 
 	// Test second statement
-	colNames2, tableNames2, action2, _ := extract(&stmtNodes[1])
+	colNames2, tableNames2, action2, _, _ := extract(&stmtNodes[1])
 	expectedColNames2 := []string{"status"}
 	expectedTableNames2 := []string{"deploy_env_ref_info"}
 	expectedAction2 := "ALTER"
@@ -718,7 +718,7 @@ INSERT INTO audit_log (action, timestamp) VALUES ('cleanup', NOW())`,
 
 			var commands []string
 			for _, stmtNode := range stmtNodes {
-				_, tableNames, _, whereFilter := extract(&stmtNode)
+				_, tableNames, _, whereFilter, _ := extract(&stmtNode)
 
 				for _, tableName := range tableNames {
 					// Filter the WHERE clause to only include conditions relevant to this table
@@ -822,7 +822,7 @@ DELETE FROM logs WHERE level = 'debug'`,
 
 			var commands []string
 			for _, stmtNode := range stmtNodes {
-				_, tableNames, _, whereFilter := extract(&stmtNode)
+				_, tableNames, _, whereFilter, _ := extract(&stmtNode)
 
 				for _, tableName := range tableNames {
 					// Filter the WHERE clause to only include conditions relevant to this table
