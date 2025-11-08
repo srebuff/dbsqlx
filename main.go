@@ -356,7 +356,7 @@ func main() {
 		case "-user":
 			i++
 			if i < len(args) {
-				user = args[i]
+				user = strings.TrimSpace(args[i])
 			} else {
 				fmt.Println("Missing value after -user flag")
 				return
@@ -364,7 +364,7 @@ func main() {
 		case "-password":
 			i++
 			if i < len(args) {
-				password = args[i]
+				password = strings.TrimSpace(args[i])
 			} else {
 				fmt.Println("Missing value after -password flag")
 				return
@@ -372,7 +372,7 @@ func main() {
 		case "-host":
 			i++
 			if i < len(args) {
-				host = args[i]
+				host = strings.TrimSpace(args[i])
 			} else {
 				fmt.Println("Missing value after -host flag")
 				return
@@ -380,7 +380,7 @@ func main() {
 		case "-ip":
 			i++
 			if i < len(args) {
-				ip = args[i]
+				ip = strings.TrimSpace(args[i])
 			} else {
 				fmt.Println("Missing value after -ip flag")
 				return
@@ -388,7 +388,7 @@ func main() {
 		case "-database":
 			i++
 			if i < len(args) {
-				database = args[i]
+				database = strings.TrimSpace(args[i])
 			} else {
 				fmt.Println("Missing value after -database flag")
 				return
