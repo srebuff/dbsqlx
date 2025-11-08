@@ -315,7 +315,7 @@ func main() {
 		fmt.Println("   or: dbsqlx -file 'file.sql' (to read SQL from file)")
 		fmt.Println("   or: dbsqlx -check -file 'file.sql' (to check syntax from file)")
 		fmt.Println("   or: dbsqlx -dump -file 'file.sql' (to generate mysqldump from file)")
-		fmt.Println("        Optional connection flags for -dump: -user USER -password PASS -host HOST -ip IP")
+		fmt.Println("        Optional connection flags for -dump: -user USER -password PASS -host HOST -ip IP -database DATABASE")
 		return
 	}
 
@@ -328,6 +328,7 @@ func main() {
 	password := ""
 	host := ""
 	ip := ""
+	database := "database_name"
 
 	// Parse command line arguments
 	args := os.Args[1:]
@@ -384,6 +385,14 @@ func main() {
 				fmt.Println("Missing value after -ip flag")
 				return
 			}
+		case "-database":
+			i++
+			if i < len(args) {
+				database = args[i]
+			} else {
+				fmt.Println("Missing value after -database flag")
+				return
+			}
 		default:
 			if !fileMode {
 				sql = args[i]
@@ -399,7 +408,7 @@ func main() {
 		fmt.Println("   or: dbsqlx -file 'file.sql' (to read SQL from file)")
 		fmt.Println("   or: dbsqlx -check -file 'file.sql' (to check syntax from file)")
 		fmt.Println("   or: dbsqlx -dump -file 'file.sql' (to generate mysqldump from file)")
-		fmt.Println("        Optional connection flags for -dump: -user USER -password PASS -host HOST -ip IP")
+		fmt.Println("        Optional connection flags for -dump: -user USER -password PASS -host HOST -ip IP -database DATABASE")
 		return
 	}
 
@@ -494,19 +503,19 @@ func main() {
 						}
 
 						// Restore original filter with table prefixes
-						fmt.Printf("WHERE %s\" database_name > /tmp/%s_ids.txt\n", whereFilter, tableName)
+						fmt.Printf("WHERE %s\" %s > /tmp/%s_ids.txt\n", whereFilter, database, tableName)
 
 						fmt.Printf("# Step 2: Dump exact rows\n")
-						fmt.Printf("# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" database_name %s\n", connOpts, tableName, tableName)
+						fmt.Printf("# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" %s %s\n", connOpts, tableName, database, tableName)
 						fmt.Printf("#\n")
 						fmt.Printf("# Or use partial filter (may include extra rows):\n")
 					}
 				}
 
 				if tableSpecificFilter != "" {
-					fmt.Printf("mysqldump%s --where=\"%s\" database_name %s\n", connOpts, tableSpecificFilter, tableName)
+					fmt.Printf("mysqldump%s --where=\"%s\" %s %s\n", connOpts, tableSpecificFilter, database, tableName)
 				} else {
-					fmt.Printf("mysqldump%s database_name %s\n", connOpts, tableName)
+					fmt.Printf("mysqldump%s %s %s\n", connOpts, database, tableName)
 				}
 			}
 			continue
