@@ -12,6 +12,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/format"
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -32,6 +33,14 @@ func ResetGlobals() {
 	host = ""
 	ip = ""
 	database = "database_name"
+
+	// Reset cobra command flags to prevent conflicts between test runs
+	rootCmd.Flags().VisitAll(func(f *pflag.Flag) {
+		f.Value.Set(f.DefValue)
+	})
+	rootCmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
+		f.Value.Set(f.DefValue)
+	})
 }
 
 // ColX represents the visitor for extracting SQL information
@@ -55,8 +64,9 @@ Examples:
   dbsqlx "SELECT * FROM users WHERE id = 1"
   dbsqlx -f query.sql
   dbsqlx dump -f query.sql -d mydb -u root -h localhost`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runParse,
+	Args:              cobra.MaximumNArgs(1),
+	RunE:              runParse,
+	DisableAutoGenTag: true,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -67,6 +77,9 @@ func Execute() {
 }
 
 func init() {
+	// Disable automatic help command to avoid conflict with -h for host
+	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
+
 	// Global flags
 	rootCmd.PersistentFlags().StringVarP(&fileInput, "file", "f", "", "Read SQL from file")
 	rootCmd.PersistentFlags().StringVarP(&user, "user", "u", "", "Database user")
@@ -74,6 +87,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&host, "host", "h", "", "Database host")
 	rootCmd.PersistentFlags().StringVar(&ip, "ip", "", "Database IP (overrides host)")
 	rootCmd.PersistentFlags().StringVarP(&database, "database", "d", "database_name", "Database name")
+
+	// Add manual help flag with --help only (no short flag)
+	rootCmd.PersistentFlags().Bool("help", false, "Show help information")
 }
 
 func runParse(cmd *cobra.Command, args []string) error {
