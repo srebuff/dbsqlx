@@ -70,8 +70,8 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVarP(&fileInput, "file", "f", "", "Read SQL from file")
 	rootCmd.PersistentFlags().StringVarP(&user, "user", "u", "", "Database user")
-	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "Database password")
-	rootCmd.PersistentFlags().StringVarP(&host, "host", "H", "", "Database host")
+	rootCmd.PersistentFlags().StringVarP(&password, "password", "P", "", "Database password")
+	rootCmd.PersistentFlags().StringVarP(&host, "host", "h", "", "Database host")
 	rootCmd.PersistentFlags().StringVar(&ip, "ip", "", "Database IP (overrides host)")
 	rootCmd.PersistentFlags().StringVarP(&database, "database", "d", "database_name", "Database name")
 }

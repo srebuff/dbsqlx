@@ -61,7 +61,7 @@ dbsqlx dump --file query.sql \
   --database production
 
 # Short form
-dbsqlx dump -f query.sql -u admin -p pass -H db.local -d mydb
+dbsqlx dump -f query.sql -u admin -P pass -h db.local -d mydb
 
 # Use IP instead of host
 dbsqlx dump -f query.sql -u admin --ip 192.168.1.100 -d mydb
@@ -77,11 +77,11 @@ Available for all commands:
 |------|-------|-------------|---------|
 | `--file` | `-f` | Read SQL from file | - |
 | `--user` | `-u` | Database user | - |
-| `--password` | `-p` | Database password | - |
-| `--host` | `-H` | Database host | - |
+| `--password` | `-P` | Database password | - |
+| `--host` | `-h` | Database host | - |
 | `--ip` | - | Database IP (overrides host) | - |
 | `--database` | `-d` | Database name | `database_name` |
-| `--help` | `-h` | Show help | - |
+| `--help` | - | Show help | - |
 
 ## Commands
 
