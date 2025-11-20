@@ -249,3 +249,48 @@ func TestDumpWithAllConnectionFlags(t *testing.T) {
 		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
 	}
 }
+
+func TestDumpWithPort(t *testing.T) {
+	// Save original args and stdout
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	defer cmd.ResetGlobals()
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	// Prepare CLI args with port
+	os.Args = []string{
+		"dbsqlx",
+		"dump",
+		"UPDATE users SET status='active' WHERE id = 1",
+		"--host", "db.example.com",
+		"--port", "3307",
+		"--user", "dbuser",
+		"--password", "dbpass",
+		"--database", "production",
+	}
+
+	// Run main()
+	main()
+
+	// Close writer and read captured output
+	_ = w.Close()
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read captured stdout: %v", err)
+	}
+
+	output := string(captured)
+
+	// Expect mysqldump with port flag
+	expected := "mysqldump -h db.example.com -P 3307 -u dbuser --password=dbpass --where=\"id=1\" production users\n"
+	if output != expected {
+		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
+	}
+}

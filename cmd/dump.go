@@ -44,6 +44,7 @@ func runDump(cmd *cobra.Command, args []string) error {
 	password = strings.TrimSpace(password)
 	host = strings.TrimSpace(host)
 	ip = strings.TrimSpace(ip)
+	port = strings.TrimSpace(port)
 	database = strings.TrimSpace(database)
 
 	// Build connection options
@@ -57,6 +58,10 @@ func runDump(cmd *cobra.Command, args []string) error {
 	connOpts := ""
 	if connTarget != "" {
 		connOpts += fmt.Sprintf(" -h %s", connTarget)
+	}
+	// Only include port if it's not the default 3306
+	if port != "" && port != "3306" {
+		connOpts += fmt.Sprintf(" -P %s", port)
 	}
 	if user != "" {
 		connOpts += fmt.Sprintf(" -u %s", user)

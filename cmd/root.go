@@ -22,6 +22,7 @@ var (
 	password  string
 	host      string
 	ip        string
+	port      string
 	database  string
 )
 
@@ -32,6 +33,7 @@ func ResetGlobals() {
 	password = ""
 	host = ""
 	ip = ""
+	port = ""
 	database = "database_name"
 
 	// Reset cobra command flags to prevent conflicts between test runs
@@ -83,9 +85,10 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVarP(&fileInput, "file", "f", "", "Read SQL from file")
 	rootCmd.PersistentFlags().StringVarP(&user, "user", "u", "", "Database user")
-	rootCmd.PersistentFlags().StringVarP(&password, "password", "P", "", "Database password")
+	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "Database password")
 	rootCmd.PersistentFlags().StringVarP(&host, "host", "h", "", "Database host")
 	rootCmd.PersistentFlags().StringVar(&ip, "ip", "", "Database IP (overrides host)")
+	rootCmd.PersistentFlags().StringVarP(&port, "port", "P", "3306", "Database port")
 	rootCmd.PersistentFlags().StringVarP(&database, "database", "d", "database_name", "Database name")
 
 	// Add manual help flag with --help only (no short flag)
