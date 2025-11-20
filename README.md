@@ -61,7 +61,7 @@ dbsqlx dump --file query.sql \
   --database production
 
 # Short form
-dbsqlx dump -f query.sql -u admin -P pass -h db.local -d mydb
+dbsqlx dump -f query.sql -u admin -p pass -h db.local -d mydb
 
 # Use IP instead of host
 dbsqlx dump -f query.sql -u admin --ip 192.168.1.100 -d mydb
@@ -73,16 +73,15 @@ dbsqlx dump -f query.sql -u admin --ip 192.168.1.100 -d mydb
 
 Available for all commands:
 
-| Flag | Short | Description | Default |
-|------|-------|-------------|---------|
-| `--file` | `-f` | Read SQL from file | - |
-| `--user` | `-u` | Database user | - |
-| `--password` | `-P` | Database password | - |
-| `--host` | `-h` | Database host | - |
-| `--ip` | - | Database IP (overrides host) | - |
-| `--database` | `-d` | Database name | `database_name` |
-| `--help` | - | Show help | - |
-
+| Flag | Short | Long | Default | Description |
+|------|-------|------|---------|-------------|
+| File | `-f` | `--file` | - | Read SQL from file |
+| User | `-u` | `--user` | - | Database user |
+| **Password** | **`-p`** | `--password` | - | Database password |
+| Host | `-h` | `--host` | - | Database host |
+| **Port** | **`-P`** | `--port` | `3306` | Database port |
+| Database | `-d` | `--database` | `database_name` | Database name |
+| IP | - | `--ip` | - | Database IP (overrides host) |
 ## Commands
 
 ### `dbsqlx [sql]`
