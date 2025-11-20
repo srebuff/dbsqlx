@@ -128,29 +128,6 @@ Output:
 | `ALTER` | ❌ No | - | Schema change only |
 | `CREATE` | ❌ No | - | No existing data |
 
-#### Simple Query
-
-```bash
-dbsqlx dump "SELECT * FROM users WHERE id = 1" -d mydb
-```
-
-Output:
-```bash
-mysqldump --where="id=1" mydb users
-```
-
-#### JOIN Query with Smart Filtering
-
-```bash
-dbsqlx dump "SELECT * FROM users u JOIN posts p ON u.id = p.user_id WHERE u.active = 1 AND p.published = TRUE" -d mydb
-```
-
-Output:
-```bash
-mysqldump --where="active=1" mydb users
-mysqldump --where="published=TRUE" mydb posts
-```
-
 #### UPDATE with JOIN (Primary Table Only)
 
 ```bash
@@ -171,24 +148,6 @@ Output:
 mysqldump -h localhost -u root --where="Years>=5" prod Employees
 ```
 
-## Shell Completion
-
-Generate shell completion scripts:
-
-```bash
-# Bash
-dbsqlx completion bash > /etc/bash_completion.d/dbsqlx
-
-# Zsh
-dbsqlx completion zsh > "${fpath[1]}/_dbsqlx"
-
-# Fish
-dbsqlx completion fish > ~/.config/fish/completions/dbsqlx.fish
-
-# PowerShell
-dbsqlx completion powershell > dbsqlx.ps1
-```
-
 ## Advanced Features
 
 ### Multi-Statement Files
@@ -205,21 +164,6 @@ The tool automatically:
 - Filters WHERE conditions per table
 - Handles UPDATE/DELETE to only dump primary tables
 
-### Smart WHERE Filtering
-
-For JOIN queries, the tool intelligently filters WHERE conditions:
-
-```sql
-SELECT * FROM users u 
-JOIN orders o ON u.id = o.user_id 
-WHERE u.status = 'active' AND o.total > 100
-```
-
-Generates:
-```bash
-mysqldump --where="status='active'" mydb users
-mysqldump --where="total>100" mydb orders
-```
 
 ### UPDATE/DELETE Special Handling
 
@@ -233,8 +177,6 @@ WHERE d.name = 'Sales'
 ```
 
 Generates mysqldump for **Employees only** (not Departments).
-
-
 
 ## Examples
 
