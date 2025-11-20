@@ -15,10 +15,11 @@ var dumpCmd = &cobra.Command{
 Automatically filters WHERE conditions per table and provides helpers
 for JOINed queries.
 
+Note: SELECT and DDL statements are skipped (only INSERT/UPDATE/DELETE generate dumps).
+
 Examples:
-  dbsqlx dump "SELECT * FROM users WHERE id = 1" -d mydb
-  dbsqlx dump -f query.sql -u root -h localhost -d production
-  dbsqlx dump -f query.sql -u admin -p secret -d mydb --ip 192.168.1.100`,
+  dbsqlx dump "UPDATE users SET name='John' WHERE id = 1" -d mydb
+  dbsqlx dump -f query.sql -u root -h localhost -d production`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runDump,
 }
@@ -64,12 +65,49 @@ func runDump(cmd *cobra.Command, args []string) error {
 		connOpts += fmt.Sprintf(" --password=%s", password)
 	}
 
+	// Track unique dump commands (deduplicate)
+	type DumpCommand struct {
+		table   string
+		filter  string
+		comment string
+	}
+	seenCommands := make(map[string]bool)
+	var dumpCommands []DumpCommand
+
 	// Process each statement
 	for _, stmtNode := range stmtNodes {
 		_, tableNames, action, whereFilter, primaryTable := Extract(&stmtNode)
 
 		if len(tableNames) == 0 {
-			fmt.Println("# No tables found in SQL statement")
+			continue
+		}
+
+		// Skip SELECT statements - they're just queries, not data modifications
+		if action == "SELECT" {
+			continue
+		}
+
+		// Skip DDL statements that don't affect data
+		if action == "ALTER" || action == "CREATE" {
+			continue
+		}
+
+		// For DROP/TRUNCATE, dump the entire table (no WHERE filter needed)
+		if action == "DROP" || action == "TRUNCATE" {
+			// These operations will destroy data, so dump the entire table
+			for _, tableName := range tableNames {
+				uniqueKey := fmt.Sprintf("%s||%s", tableName, database)
+				if seenCommands[uniqueKey] {
+					continue
+				}
+				seenCommands[uniqueKey] = true
+
+				dumpCommands = append(dumpCommands, DumpCommand{
+					table:   tableName,
+					filter:  "",
+					comment: fmt.Sprintf("# Backup before %s", action),
+				})
+			}
 			continue
 		}
 
@@ -83,6 +121,14 @@ func runDump(cmd *cobra.Command, args []string) error {
 		for _, tableName := range tablesToDump {
 			tableSpecificFilter := FilterWhereForTable(whereFilter, tableName, tableNames)
 
+			// Create unique key for deduplication
+			uniqueKey := fmt.Sprintf("%s|%s|%s", tableName, tableSpecificFilter, database)
+			if seenCommands[uniqueKey] {
+				continue // Skip duplicate
+			}
+			seenCommands[uniqueKey] = true
+
+			comment := ""
 			// For cross-table conditions, provide helper
 			if (action == "UPDATE" || action == "DELETE") && tableName == primaryTable && len(tableNames) > 1 {
 				allConditionsFilter := whereFilter
@@ -91,9 +137,9 @@ func runDump(cmd *cobra.Command, args []string) error {
 				}
 
 				if allConditionsFilter != tableSpecificFilter && tableSpecificFilter != "" {
-					fmt.Println("# To get exact rows matching all JOIN conditions:")
-					fmt.Println("# Step 1: Get matching IDs")
-					fmt.Printf("# mysql -N -e \"SELECT e.id FROM %s e ", tableName)
+					comment = fmt.Sprintf("# To get exact rows matching all JOIN conditions:\n"+
+						"# Step 1: Get matching IDs\n"+
+						"# mysql -N -e \"SELECT e.id FROM %s e ", tableName)
 
 					for _, tbl := range tableNames {
 						if tbl != tableName {
@@ -101,23 +147,36 @@ func runDump(cmd *cobra.Command, args []string) error {
 							if alias == string(strings.ToLower(tableName)[0]) {
 								alias = string(strings.ToLower(tbl)[0:2])
 							}
-							fmt.Printf("JOIN %s %s ON <join_condition> ", tbl, alias)
+							comment += fmt.Sprintf("JOIN %s %s ON <join_condition> ", tbl, alias)
 						}
 					}
 
-					fmt.Printf("WHERE %s\" %s > /tmp/%s_ids.txt\n", whereFilter, database, tableName)
-					fmt.Println("# Step 2: Dump exact rows")
-					fmt.Printf("# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" %s %s\n", connOpts, tableName, database, tableName)
-					fmt.Println("#")
-					fmt.Println("# Or use partial filter (may include extra rows):")
+					comment += fmt.Sprintf("WHERE %s\" %s > /tmp/%s_ids.txt\n"+
+						"# Step 2: Dump exact rows\n"+
+						"# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" %s %s\n"+
+						"#\n"+
+						"# Or use partial filter (may include extra rows):",
+						whereFilter, database, tableName, connOpts, tableName, database, tableName)
 				}
 			}
 
-			if tableSpecificFilter != "" {
-				fmt.Printf("mysqldump%s --where=\"%s\" %s %s\n", connOpts, tableSpecificFilter, database, tableName)
-			} else {
-				fmt.Printf("mysqldump%s %s %s\n", connOpts, database, tableName)
-			}
+			dumpCommands = append(dumpCommands, DumpCommand{
+				table:   tableName,
+				filter:  tableSpecificFilter,
+				comment: comment,
+			})
+		}
+	}
+
+	// Output all unique commands
+	for _, dc := range dumpCommands {
+		if dc.comment != "" {
+			fmt.Println(dc.comment)
+		}
+		if dc.filter != "" {
+			fmt.Printf("mysqldump%s --where=\"%s\" %s %s\n", connOpts, dc.filter, database, dc.table)
+		} else {
+			fmt.Printf("mysqldump%s %s %s\n", connOpts, database, dc.table)
 		}
 	}
 

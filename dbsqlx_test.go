@@ -29,7 +29,7 @@ func TestDumpWithUserAndHost(t *testing.T) {
 	os.Args = []string{
 		"dbsqlx",
 		"dump",
-		"SELECT * FROM users WHERE id = 42",
+		"DELETE FROM users WHERE id = 42",
 		"--user", "root",
 		"--host", "db.example.local",
 	}
@@ -71,7 +71,7 @@ func TestDumpWithDatabase(t *testing.T) {
 	os.Args = []string{
 		"dbsqlx",
 		"dump",
-		"SELECT * FROM users WHERE id = 42",
+		"UPDATE users SET status='active' WHERE id = 42",
 		"--user", "ops_admin",
 		"--host", "10.101.101.101",
 		"--database", "devops_base",
@@ -118,7 +118,7 @@ func TestDumpWithoutDatabase(t *testing.T) {
 	os.Args = []string{
 		"dbsqlx",
 		"dump",
-		"SELECT * FROM products WHERE price > 100",
+		"DELETE FROM products WHERE price > 100",
 	}
 
 	// Run main()
@@ -142,8 +142,8 @@ func TestDumpWithoutDatabase(t *testing.T) {
 
 func TestDumpWithDatabaseAndFile(t *testing.T) {
 	// Create a temporary SQL file for testing
-	sqlContent := `SELECT * FROM users WHERE id = 1;
-SELECT * FROM orders WHERE user_id = 1;`
+	sqlContent := `UPDATE users SET status='verified' WHERE id = 1;
+DELETE FROM orders WHERE user_id = 1;`
 	tmpfile, err := os.CreateTemp("", "test*.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestDumpWithAllConnectionFlags(t *testing.T) {
 	os.Args = []string{
 		"dbsqlx",
 		"dump",
-		"SELECT * FROM logs WHERE level = 'error'",
+		"DELETE FROM logs WHERE level = 'error'",
 		"--user", "admin",
 		"--password", "secret123",
 		"--ip", "192.168.1.100",

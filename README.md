@@ -118,6 +118,17 @@ Output:
 
 **Dump command**: Generate mysqldump commands.
 
+| Statement | Generates Dump? | WHERE Filter? | Comment |
+|-----------|-----------------|---------------|---------|
+| `SELECT` | ❌ No | - | Just a query |
+| `INSERT` | ✅ Yes | ✅ Yes | Data modification |
+| `UPDATE` | ✅ Yes | ✅ Yes | Data modification |
+| `DELETE` | ✅ Yes | ✅ Yes | Data modification |
+| `DROP` | ✅ Yes | ❌ No (entire table) | Data will be lost! |
+| `TRUNCATE` | ✅ Yes | ❌ No (entire table) | Data will be lost! |
+| `ALTER` | ❌ No | - | Schema change only |
+| `CREATE` | ❌ No | - | No existing data |
+
 #### Simple Query
 
 ```bash
