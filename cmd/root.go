@@ -35,6 +35,7 @@ func ResetGlobals() {
 	ip = ""
 	port = ""
 	database = "database_name"
+	dumpArgs = "" // Reset dump args
 
 	// Reset cobra command flags to prevent conflicts between test runs
 	rootCmd.Flags().VisitAll(func(f *pflag.Flag) {
@@ -43,6 +44,12 @@ func ResetGlobals() {
 	rootCmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
 		f.Value.Set(f.DefValue)
 	})
+	// Reset dump command flags
+	if dumpCmd != nil {
+		dumpCmd.Flags().VisitAll(func(f *pflag.Flag) {
+			f.Value.Set(f.DefValue)
+		})
+	}
 }
 
 // ColX represents the visitor for extracting SQL information

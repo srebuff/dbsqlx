@@ -294,3 +294,93 @@ func TestDumpWithPort(t *testing.T) {
 		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
 	}
 }
+
+func TestDumpWithDumpArgs(t *testing.T) {
+	// Save original args and stdout
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	defer cmd.ResetGlobals()
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	// Prepare CLI args with dump-args flag
+	os.Args = []string{
+		"dbsqlx",
+		"dump",
+		"DELETE FROM users WHERE id = 42",
+		"--dump-args", "--skip-lock-tables --single-transaction",
+		"--user", "root",
+		"--host", "localhost",
+		"--database", "testdb",
+	}
+
+	// Run main()
+	main()
+
+	// Close writer and read captured output
+	_ = w.Close()
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read captured stdout: %v", err)
+	}
+
+	output := string(captured)
+
+	// Expect mysqldump with dump-args
+	expected := "mysqldump -h localhost -u root --skip-lock-tables --single-transaction --where=\"id=42\" testdb users\n"
+	if output != expected {
+		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
+	}
+}
+
+func TestDumpWithDumpArgsAndPort(t *testing.T) {
+	// Save original args and stdout
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	defer cmd.ResetGlobals()
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	// Prepare CLI args with dump-args and port
+	os.Args = []string{
+		"dbsqlx",
+		"dump",
+		"UPDATE users SET status='active' WHERE id = 1",
+		"--dump-args", "--skip-lock-tables --no-create-info",
+		"--user", "admin",
+		"--host", "db.example.com",
+		"--port", "3307",
+		"--password", "secret",
+		"--database", "production",
+	}
+
+	// Run main()
+	main()
+
+	// Close writer and read captured output
+	_ = w.Close()
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read captured stdout: %v", err)
+	}
+
+	output := string(captured)
+
+	// Expect mysqldump with dump-args, port, and password
+	expected := "mysqldump -h db.example.com -P 3307 -u admin --password=secret --skip-lock-tables --no-create-info --where=\"id=1\" production users\n"
+	if output != expected {
+		t.Errorf("unexpected output.\nGot:  %q\nWant: %q", output, expected)
+	}
+}

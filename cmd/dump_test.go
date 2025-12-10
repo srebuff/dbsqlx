@@ -775,3 +775,231 @@ DROP TABLE users;`,
 		})
 	}
 }
+
+func TestDumpWithDumpArgs(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		dumpArgs     string
+		user         string
+		host         string
+		port         string
+		password     string
+		wantCommands []string
+	}{
+		{
+			name:     "Single dump-arg",
+			sql:      "DELETE FROM users WHERE id = 1",
+			dumpArgs: "--skip-lock-tables",
+			wantCommands: []string{
+				"mysqldump --skip-lock-tables --where=\"id=1\" database_name users",
+			},
+		},
+		{
+			name:     "Multiple dump-args space-separated",
+			sql:      "UPDATE users SET status='active' WHERE id = 42",
+			dumpArgs: "--skip-lock-tables --single-transaction",
+			wantCommands: []string{
+				"mysqldump --skip-lock-tables --single-transaction --where=\"id=42\" database_name users",
+			},
+		},
+		{
+			name:     "Multiple dump-args with connection options",
+			sql:      "DELETE FROM users WHERE id = 1",
+			dumpArgs: "--skip-lock-tables --single-transaction --no-create-info",
+			user:     "root",
+			host:     "localhost",
+			wantCommands: []string{
+				"mysqldump -h localhost -u root --skip-lock-tables --single-transaction --no-create-info --where=\"id=1\" database_name users",
+			},
+		},
+		{
+			name:     "Dump-args with port and password",
+			sql:      "UPDATE users SET name='John' WHERE id = 5",
+			dumpArgs: "--skip-lock-tables",
+			user:     "admin",
+			password: "secret",
+			host:     "db.example.com",
+			port:     "3307",
+			wantCommands: []string{
+				"mysqldump -h db.example.com -P 3307 -u admin --password=secret --skip-lock-tables --where=\"id=5\" database_name users",
+			},
+		},
+		{
+			name:     "Dump-args with default port (should not include port)",
+			sql:      "DELETE FROM users WHERE id = 1",
+			dumpArgs: "--skip-lock-tables",
+			user:     "root",
+			host:     "localhost",
+			port:     "3306",
+			wantCommands: []string{
+				"mysqldump -h localhost -u root --skip-lock-tables --where=\"id=1\" database_name users",
+			},
+		},
+		{
+			name:     "Empty dump-args (should not break)",
+			sql:      "DELETE FROM users WHERE id = 1",
+			dumpArgs: "",
+			wantCommands: []string{
+				"mysqldump --where=\"id=1\" database_name users",
+			},
+		},
+		{
+			name:     "Dump-args with multiple statements",
+			sql:      "DELETE FROM users WHERE id = 1; DELETE FROM orders WHERE user_id = 2",
+			dumpArgs: "--skip-lock-tables --single-transaction",
+			wantCommands: []string{
+				"mysqldump --skip-lock-tables --single-transaction --where=\"id=1\" database_name users",
+				"mysqldump --skip-lock-tables --single-transaction --where=\"user_id=2\" database_name orders",
+			},
+		},
+		{
+			name:     "Dump-args with TRUNCATE (full table dump)",
+			sql:      "TRUNCATE TABLE users",
+			dumpArgs: "--skip-lock-tables",
+			wantCommands: []string{
+				"mysqldump --skip-lock-tables database_name users",
+			},
+		},
+		{
+			name:     "Dump-args with extra whitespace",
+			sql:      "DELETE FROM users WHERE id = 1",
+			dumpArgs: "  --skip-lock-tables   --single-transaction  ",
+			wantCommands: []string{
+				"mysqldump --skip-lock-tables --single-transaction --where=\"id=1\" database_name users",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmtNodes, err := ParseAll(tt.sql)
+			if err != nil {
+				t.Fatalf("ParseAll() error = %v", err)
+			}
+
+			// Build connection options
+			connTarget := ""
+			if tt.host != "" {
+				connTarget = tt.host
+			}
+
+			connOpts := ""
+			if connTarget != "" {
+				connOpts += fmt.Sprintf(" -h %s", connTarget)
+			}
+			// Only include port if it's not the default 3306
+			if tt.port != "" && tt.port != "3306" {
+				connOpts += fmt.Sprintf(" -P %s", tt.port)
+			}
+			if tt.user != "" {
+				connOpts += fmt.Sprintf(" -u %s", tt.user)
+			}
+			if tt.password != "" {
+				connOpts += fmt.Sprintf(" --password=%s", tt.password)
+			}
+
+			// Process dump-args
+			dumpArgsStr := ""
+			dumpArgsTrimmed := strings.TrimSpace(tt.dumpArgs)
+			if dumpArgsTrimmed != "" {
+				args := strings.Fields(dumpArgsTrimmed)
+				if len(args) > 0 {
+					dumpArgsStr = " " + strings.Join(args, " ")
+				}
+			}
+
+			// Track unique dump commands (deduplicate)
+			type DumpCommand struct {
+				table   string
+				filter  string
+				comment string
+			}
+			seenCommands := make(map[string]bool)
+			var dumpCommands []DumpCommand
+
+			// Process each statement
+			for _, stmtNode := range stmtNodes {
+				_, tableNames, action, whereFilter, primaryTable := Extract(&stmtNode)
+
+				if len(tableNames) == 0 {
+					continue
+				}
+
+				// Skip SELECT statements
+				if action == "SELECT" {
+					continue
+				}
+
+				// Skip DDL statements that don't affect data
+				if action == "ALTER" || action == "CREATE" {
+					continue
+				}
+
+				// For DROP/TRUNCATE, dump the entire table
+				if action == "DROP" || action == "TRUNCATE" {
+					for _, tableName := range tableNames {
+						uniqueKey := fmt.Sprintf("%s||%s", tableName, "database_name")
+						if seenCommands[uniqueKey] {
+							continue
+						}
+						seenCommands[uniqueKey] = true
+
+						dumpCommands = append(dumpCommands, DumpCommand{
+							table:   tableName,
+							filter:  "",
+							comment: fmt.Sprintf("# Backup before %s", action),
+						})
+					}
+					continue
+				}
+
+				// For UPDATE/DELETE, only dump the primary table
+				tablesToDump := tableNames
+				if (action == "UPDATE" || action == "DELETE") && primaryTable != "" {
+					tablesToDump = []string{primaryTable}
+				}
+
+				// Generate mysqldump command for each table
+				for _, tableName := range tablesToDump {
+					tableSpecificFilter := FilterWhereForTable(whereFilter, tableName, tableNames)
+
+					// Create unique key for deduplication
+					uniqueKey := fmt.Sprintf("%s|%s|%s", tableName, tableSpecificFilter, "database_name")
+					if seenCommands[uniqueKey] {
+						continue
+					}
+					seenCommands[uniqueKey] = true
+
+					dumpCommands = append(dumpCommands, DumpCommand{
+						table:   tableName,
+						filter:  tableSpecificFilter,
+						comment: "",
+					})
+				}
+			}
+
+			// Generate commands
+			var commands []string
+			for _, dc := range dumpCommands {
+				if dc.filter != "" {
+					commands = append(commands, fmt.Sprintf("mysqldump%s%s --where=\"%s\" database_name %s", connOpts, dumpArgsStr, dc.filter, dc.table))
+				} else {
+					commands = append(commands, fmt.Sprintf("mysqldump%s%s database_name %s", connOpts, dumpArgsStr, dc.table))
+				}
+			}
+
+			if !reflect.DeepEqual(commands, tt.wantCommands) {
+				t.Errorf("Generated commands mismatch")
+				t.Errorf("Got:")
+				for i, cmd := range commands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+				t.Errorf("Want:")
+				for i, cmd := range tt.wantCommands {
+					t.Errorf("  [%d] %s", i, cmd)
+				}
+			}
+		})
+	}
+}

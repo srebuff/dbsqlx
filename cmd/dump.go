@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var dumpArgs string
+
 var dumpCmd = &cobra.Command{
 	Use:   "dump [sql-statement]",
 	Short: "Generate mysqldump commands",
@@ -19,13 +21,15 @@ Note: SELECT and DDL statements are skipped (only INSERT/UPDATE/DELETE generate 
 
 Examples:
   dbsqlx dump "UPDATE users SET name='John' WHERE id = 1" -d mydb
-  dbsqlx dump -f query.sql -u root -h localhost -d production`,
+  dbsqlx dump -f query.sql -u root -h localhost -d production
+  dbsqlx dump "DELETE FROM users WHERE id=1" --dump-args "--skip-lock-tables --single-transaction"`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runDump,
 }
 
 func init() {
 	rootCmd.AddCommand(dumpCmd)
+	dumpCmd.Flags().StringVar(&dumpArgs, "dump-args", "", "Additional arguments to pass to mysqldump (space-separated)")
 }
 
 func runDump(cmd *cobra.Command, args []string) error {
@@ -68,6 +72,17 @@ func runDump(cmd *cobra.Command, args []string) error {
 	}
 	if password != "" {
 		connOpts += fmt.Sprintf(" --password=%s", password)
+	}
+
+	// Add additional mysqldump arguments
+	dumpArgsStr := ""
+	dumpArgs = strings.TrimSpace(dumpArgs)
+	if dumpArgs != "" {
+		// Split by spaces and filter out empty strings
+		args := strings.Fields(dumpArgs)
+		if len(args) > 0 {
+			dumpArgsStr = " " + strings.Join(args, " ")
+		}
 	}
 
 	// Track unique dump commands (deduplicate)
@@ -158,10 +173,10 @@ func runDump(cmd *cobra.Command, args []string) error {
 
 					comment += fmt.Sprintf("WHERE %s\" %s > /tmp/%s_ids.txt\n"+
 						"# Step 2: Dump exact rows\n"+
-						"# mysqldump%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" %s %s\n"+
+						"# mysqldump%s%s --where=\"id IN ($(cat /tmp/%s_ids.txt | tr '\\n' ',' | sed 's/,$//' ))\" %s %s\n"+
 						"#\n"+
 						"# Or use partial filter (may include extra rows):",
-						whereFilter, database, tableName, connOpts, tableName, database, tableName)
+						whereFilter, database, tableName, connOpts, dumpArgsStr, tableName, database, tableName)
 				}
 			}
 
@@ -179,9 +194,9 @@ func runDump(cmd *cobra.Command, args []string) error {
 			fmt.Println(dc.comment)
 		}
 		if dc.filter != "" {
-			fmt.Printf("mysqldump%s --where=\"%s\" %s %s\n", connOpts, dc.filter, database, dc.table)
+			fmt.Printf("mysqldump%s%s --where=\"%s\" %s %s\n", connOpts, dumpArgsStr, dc.filter, database, dc.table)
 		} else {
-			fmt.Printf("mysqldump%s %s %s\n", connOpts, database, dc.table)
+			fmt.Printf("mysqldump%s%s %s %s\n", connOpts, dumpArgsStr, database, dc.table)
 		}
 	}
 
