@@ -854,6 +854,13 @@ func TestDumpWithDumpArgs(t *testing.T) {
 			},
 		},
 		{
+			name: "DELETE with subquery keeps primary table",
+			sql: "DELETE FROM deploy_node_ref_info WHERE env_id IN (SELECT env_id FROM deploy_env_ref_info WHERE project_id = '6993044168f4ed3b1384a9a6d8ef8584')",
+			wantCommands: []string{
+				"mysqldump --where=\"env_id IN (SELECT env_id FROM deploy_env_ref_info WHERE project_id='6993044168f4ed3b1384a9a6d8ef8584')\" database_name deploy_node_ref_info",
+			},
+		},
+		{
 			name:     "Dump-args with TRUNCATE (full table dump)",
 			sql:      "TRUNCATE TABLE users",
 			dumpArgs: "--skip-lock-tables",

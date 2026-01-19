@@ -158,38 +158,54 @@ func (v *ColX) Enter(in ast.Node) (ast.Node, bool) {
 
 	switch stmt := in.(type) {
 	case *ast.InsertStmt:
-		v.Action = "INSERT"
+		if v.Action == "" {
+			v.Action = "INSERT"
+		}
 		if stmt.Table != nil && stmt.Table.TableRefs != nil {
 			v.extractTableNames(stmt.Table.TableRefs)
 		}
 	case *ast.UpdateStmt:
-		v.Action = "UPDATE"
+		isTop := v.Action == ""
+		if isTop {
+			v.Action = "UPDATE"
+		}
 		if stmt.TableRefs != nil {
+			beforeTables := len(v.TableNames)
 			v.extractTableNames(stmt.TableRefs.TableRefs)
-			if len(v.TableNames) > 0 {
-				v.PrimaryTable = v.TableNames[0]
+			if isTop && v.PrimaryTable == "" && len(v.TableNames) > beforeTables {
+				v.PrimaryTable = v.TableNames[beforeTables]
 			}
 		}
-		if stmt.Where != nil {
+		if isTop && stmt.Where != nil {
 			v.extractWhereFilterFromExpr(stmt.Where)
 		}
 	case *ast.DeleteStmt:
-		v.Action = "DELETE"
+		isTop := v.Action == ""
+		if isTop {
+			v.Action = "DELETE"
+		}
 		if stmt.TableRefs != nil {
+			beforeTables := len(v.TableNames)
 			v.extractTableNames(stmt.TableRefs.TableRefs)
-			if len(v.TableNames) > 0 {
-				v.PrimaryTable = v.TableNames[0]
+			if isTop && v.PrimaryTable == "" && len(v.TableNames) > beforeTables {
+				v.PrimaryTable = v.TableNames[beforeTables]
 			}
 		}
-		v.extractWhereFilter(stmt.Where)
+		if isTop {
+			v.extractWhereFilter(stmt.Where)
+		}
 	case *ast.SelectStmt:
-		v.Action = "SELECT"
 		if stmt.From != nil && stmt.From.TableRefs != nil {
 			v.extractTableNames(stmt.From.TableRefs)
 		}
-		v.extractWhereFilter(stmt.Where)
+		if v.Action == "" {
+			v.Action = "SELECT"
+			v.extractWhereFilter(stmt.Where)
+		}
 	case *ast.AlterTableStmt:
-		v.Action = "ALTER"
+		if v.Action == "" {
+			v.Action = "ALTER"
+		}
 		if stmt.Table != nil {
 			tableName := stmt.Table.Name.O
 			if tableName != "" {
@@ -197,7 +213,9 @@ func (v *ColX) Enter(in ast.Node) (ast.Node, bool) {
 			}
 		}
 	case *ast.CreateTableStmt:
-		v.Action = "CREATE"
+		if v.Action == "" {
+			v.Action = "CREATE"
+		}
 		if stmt.Table != nil {
 			tableName := stmt.Table.Name.O
 			if tableName != "" {
@@ -205,7 +223,9 @@ func (v *ColX) Enter(in ast.Node) (ast.Node, bool) {
 			}
 		}
 	case *ast.DropTableStmt:
-		v.Action = "DROP"
+		if v.Action == "" {
+			v.Action = "DROP"
+		}
 		for _, table := range stmt.Tables {
 			if table != nil {
 				tableName := table.Name.O
@@ -215,7 +235,9 @@ func (v *ColX) Enter(in ast.Node) (ast.Node, bool) {
 			}
 		}
 	case *ast.TruncateTableStmt:
-		v.Action = "TRUNCATE"
+		if v.Action == "" {
+			v.Action = "TRUNCATE"
+		}
 		if stmt.Table != nil {
 			tableName := stmt.Table.Name.O
 			if tableName != "" {
